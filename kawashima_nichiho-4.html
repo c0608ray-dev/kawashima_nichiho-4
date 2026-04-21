@@ -298,8 +298,8 @@ function lsGet(k) { try { var v = localStorage.getItem(k); return v ? JSON.parse
 function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch(e) {} }
 function lsDel(k) { try { localStorage.removeItem(k); } catch(e) {} }
 
-function today() { return new Date().toISOString().slice(0, 10); }
-function thisMonth() { return new Date().toISOString().slice(0, 7); }
+function today() { var d = new Date(); return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'); }
+function thisMonth() { var d = new Date(); return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0'); }
 
 function calcDuration(s, e) {
   if (!s || !e) return '';
@@ -1578,7 +1578,7 @@ function buildBatchMode(c, apiKey) {
 
     if (item.status === 'done' && item.form) {
       var fields = el('div', 'batch-fields');
-      var cats = ['燃料費','車両費','旅費交通費','通信費','消耗品費','損害保険料','租税公課','その他'];
+      var cats = ['燃料費','車両費','旅費交通費','通信費','消耗品費','損害保険料','減価償却費','租税公課','その他'];
 
       function bInp(type, key) {
         var inp = el('input', 'batch-inp');
@@ -1638,9 +1638,11 @@ function analyzeBatch(apiKey) {
     .then(function(r) { return r.json(); })
     .then(function(data) {
       var text = (data.content && data.content[0] && data.content[0].text) || '';
-      var parsed = JSON.parse(text.replace(/```json|```/g, '').trim());
-      item.status = 'done';
-      item.form = { date: parsed.date || today(), amount: parsed.amount || '', category: parsed.category || 'その他', memo: parsed.memo || '', payment: '現金' };
+      try {
+        var parsed = JSON.parse(text.replace(/```json|```/g, '').trim());
+        item.status = 'done';
+        item.form = { date: parsed.date || today(), amount: parsed.amount || '', category: parsed.category || 'その他', memo: parsed.memo || '', payment: '現金' };
+      } catch(e) { item.status = 'error'; }
     })
     .catch(function() { item.status = 'error'; })
     .finally(function() { setTimeout(next, 500); });
@@ -1658,14 +1660,18 @@ function saveBatchAll() {
     try {
       var im = document.createElement('img');
       im.src = item.img;
-      var cv = document.createElement('canvas');
-      var maxW = 400;
-      var scale = im.width > maxW ? maxW / im.width : 1;
-      cv.width = im.width * scale; cv.height = im.height * scale;
-      cv.getContext('2d').drawImage(im, 0, 0, cv.width, cv.height);
-      thumb = cv.toDataURL('image/jpeg', 0.4);
+      if (im.width > 0) {
+        var cv = document.createElement('canvas');
+        var maxW = 400;
+        var scale = im.width > maxW ? maxW / im.width : 1;
+        cv.width = im.width * scale; cv.height = im.height * scale;
+        cv.getContext('2d').drawImage(im, 0, 0, cv.width, cv.height);
+        thumb = cv.toDataURL('image/jpeg', 0.4);
+      } else {
+        thumb = item.img;
+      }
     } catch(e) {}
-    all.push({ id: Date.now() + saved, date: item.form.date, amount: parseFloat(item.form.amount) || 0, category: item.form.category, memo: item.form.memo, payment: item.form.payment, img: thumb });
+    all.push({ id: Date.now() + '_' + saved, date: item.form.date, amount: parseFloat(item.form.amount) || 0, category: item.form.category, memo: item.form.memo, payment: item.form.payment, img: thumb });
     saved++;
   });
   try {
@@ -1730,7 +1736,8 @@ function analyzeReceipt() {
     if (data.error) { rcptState.error = data.error.message || 'APIエラー'; render(); return; }
     var text = (data.content && data.content[0] && data.content[0].text) || '';
     var clean = text.replace(/```json|```/g, '').trim();
-    var parsed = JSON.parse(clean);
+    var parsed;
+    try { parsed = JSON.parse(clean); } catch(e) { rcptState.analyzing = false; rcptState.error = 'AI応答の解析に失敗しました'; render(); return; }
     rcptState.result = parsed;
     rcptState.form = {
       date: parsed.date || today(),
