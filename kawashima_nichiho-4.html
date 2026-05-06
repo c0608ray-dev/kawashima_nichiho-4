@@ -255,6 +255,16 @@ input, textarea, select { -webkit-user-select: text; user-select: text; }
 .cl-form { background: #141c12; border: 1px solid #2e4028; border-radius: 10px; padding: 14px; margin-bottom: 12px; }
 .cl-form-title { font-size: 11px; color: #6b8f5e; letter-spacing: 2px; margin-bottom: 10px; }
 .cl-add-btn { width: 100%; background: transparent; color: #8fcf7a; border: 1px solid #4a7c3f; border-radius: 8px; padding: 10px; font-size: 13px; cursor: pointer; font-family: inherit; margin-bottom: 12px; }
+.assign-box { background: #141c12; border: 1px solid #2e4028; border-radius: 10px; padding: 14px; margin: 12px 0 16px; }
+.assign-title { font-size: 11px; color: #6b8f5e; letter-spacing: 2px; margin-bottom: 10px; }
+.assign-stat { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 10px 0; }
+.assign-stat-card { background: #1a2018; border-radius: 6px; padding: 10px; }
+.assign-stat-lbl { font-size: 10px; color: #5a7050; margin-bottom: 4px; }
+.assign-stat-val { font-size: 18px; color: #8fcf7a; font-weight: bold; }
+.assign-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+.assign-btn { border-radius: 6px; padding: 10px 8px; font-size: 12px; font-weight: bold; cursor: pointer; font-family: inherit; }
+.assign-btn.safe { background: #2e4028; color: #8fcf7a; border: 1px solid #4a7c3f; }
+.assign-btn.overwrite { background: transparent; color: #f0c060; border: 1px solid #8f6f1f; }
 </style>
 </head>
 <body>
@@ -283,6 +293,7 @@ input, textarea, select { -webkit-user-select: text; user-select: text; }
 (function() {
 
 var SK = 'kawashima-reports';
+var APP_VERSION = '2026-05-06-assign-pwa';
 var OK = 'kawashima-oil';
 var DK = 'kawashima-draft';
 var FK = 'kawashima-last-fuel';
@@ -295,7 +306,15 @@ var AK = 'kawashima-apikey';   // APIキー
 var CLK = 'kawashima-clients'; // 請求先リスト
 
 function lsGet(k) { try { var v = localStorage.getItem(k); return v ? JSON.parse(v) : null; } catch(e) { return null; } }
-function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch(e) {} }
+function lsSet(k, v) {
+  try {
+    localStorage.setItem(k, JSON.stringify(v));
+    return true;
+  } catch(e) {
+    console.error('保存に失敗しました:', k, e);
+    return false;
+  }
+}
 function lsDel(k) { try { localStorage.removeItem(k); } catch(e) {} }
 
 function today() { var d = new Date(); return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'); }
@@ -323,28 +342,67 @@ function calcFuelEff(oFuel, fuel, prevOdo) {
   return ((c - p) / f).toFixed(1);
 }
 
+function recIdNum(r) {
+  var n = parseFloat(r && r.id);
+  return isNaN(n) ? 0 : n;
+}
+
 // 履歴レコードから「その前回給油時のオドメーター」を取得
 function getPrevFuelOdo(rec, allRecords) {
   var sorted = allRecords
-    .filter(function(r) { return r.odometerFuel && r.id !== rec.id; })
-    .sort(function(a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : a.id - b.id; });
+    .filter(function(r) { return r.odometerFuel && r.fuel && String(r.id) !== String(rec.id); })
+    .sort(function(a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : recIdNum(a) - recIdNum(b); });
   var prev = null;
   for (var i = 0; i < sorted.length; i++) {
     var s = sorted[i];
-    if (s.date < rec.date || (s.date === rec.date && s.id < rec.id)) prev = s;
+    if (s.date < rec.date || (s.date === rec.date && recIdNum(s) < recIdNum(rec))) prev = s;
   }
   return prev ? parseFloat(prev.odometerFuel) : NaN;
 }
 
+function getLatestFuelOdo(allRecords) {
+  var list = (allRecords || records || [])
+    .filter(function(r) { return r.odometerFuel && r.fuel; })
+    .sort(function(a, b) { return a.date < b.date ? 1 : a.date > b.date ? -1 : recIdNum(b) - recIdNum(a); });
+  return list.length ? list[0].odometerFuel : '';
+}
+
 function fmtNum(n) { return Number(n).toLocaleString(); }
 function fmtYen(n) { return '¥' + Number(Math.round(n)).toLocaleString(); }
+function escHtml(v) {
+  return String(v == null ? '' : v)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+function escHtmlBr(v) { return escHtml(v).replace(/\n/g, '<br>'); }
+function parseDataUrl(dataUrl) {
+  var m = String(dataUrl || '').match(/^data:([^;]+);base64,(.*)$/);
+  return { mime: m ? m[1] : 'image/jpeg', data: m ? m[2] : String(dataUrl || '').split(',')[1] || '' };
+}
+function downloadBlob(blob, filename) {
+  var a = document.createElement('a');
+  var url = URL.createObjectURL(blob);
+  a.href = url;
+  a.download = filename;
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(function() {
+    URL.revokeObjectURL(url);
+    if (a.parentNode) a.parentNode.removeChild(a);
+  }, 1500);
+}
 
 // 選択中の請求先を取得（未選択時は invSettings のフォールバック）
 function getActiveClient() {
   var clients = lsGet(CLK) || [];
   var client = null;
-  if (selectedClientId) client = clients.find(function(c) { return c.id === selectedClientId; });
+  if (selectedClientId) client = clients.find(function(c) { return String(c.id) === String(selectedClientId); });
   return {
+    clientId: client ? client.id : null,
     clientName: client ? client.name : (invSettings.clientName || ''),
     billingType: client ? (client.billingType || 'hourly') : 'hourly',
     hourlyRate: client ? (client.hourlyRate || invSettings.hourlyRate) : invSettings.hourlyRate,
@@ -385,7 +443,7 @@ function billedAmount(billedMin, hourlyRate) {
 
 var records = lsGet(SK) || [];
 var oilData = lsGet(OK) || { lastChangeOdometer: '', interval: '10000', warnThreshold: '5000', filterLastOdo: '', filterInterval: '20000', filterWarnThreshold: '5000' };
-var lastFuel = lsGet(FK) || '';
+var lastFuel = getLatestFuelOdo(records) || lsGet(FK) || '';
 var invSettings = lsGet(IK) || {
   hourlyRate: '3000',
   breakMin: '60',
@@ -411,6 +469,8 @@ var selectedClientId = lsGet('kawashima-sel-client') || null;
 var showClientForm = false;
 var editClientId = null;
 var clientForm = { name: '', billingType: 'hourly', hourlyRate: '3000', breakMin: '60', dailyRate: '', perItemRate: '', paymentNote: '当月末払い', itemName: '配送業務委託費' };
+var assignMonth = '';
+var assignClientId = selectedClientId || '';
 
 // 月初バックアップ自動ダウンロード
 (function() {
@@ -434,11 +494,7 @@ var clientForm = { name: '', billingType: 'hourly', hourlyRate: '3000', breakMin
         return;
       }
     }
-    var a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(a.href);
+    downloadBlob(blob, filename);
     lsSet(BK, currentMonth);
   }
 })();
@@ -560,7 +616,7 @@ function exportJSON() {
       return;
     }
   }
-  var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename; a.click(); URL.revokeObjectURL(a.href);
+  downloadBlob(blob, filename);
   setSyncFlash('📤 エクスポートしました（設定含む）');
 }
 function importJSON() { document.getElementById('import-file').click(); }
@@ -573,11 +629,14 @@ document.getElementById('import-file').addEventListener('change', function(e) {
       var data = JSON.parse(ev.target.result);
       if (!data.records || !Array.isArray(data.records)) { setSyncFlash('❌ ファイルの形式が正しくありません'); return; }
       var merged = data.records.slice();
-      records.forEach(function(r) { if (!merged.find(function(m) { return m.id === r.id; })) merged.push(r); });
+      records.forEach(function(r) { if (!merged.find(function(m) { return String(m.id) === String(r.id); })) merged.push(r); });
       merged.sort(function(a, b) { return b.date > a.date ? 1 : b.date < a.date ? -1 : 0; });
-      records = merged; lsSet(SK, records);
+      var oldRecords = records.slice();
+      records = merged;
+      if (!lsSet(SK, records)) { records = oldRecords; setSyncFlash('❌ 保存容量不足でインポートできません'); return; }
       if (data.oilData) { oilData = data.oilData; lsSet(OK, oilData); }
-      if (data.lastFuel) { lastFuel = data.lastFuel; lsSet(FK, lastFuel); }
+      lastFuel = getLatestFuelOdo(records) || data.lastFuel || '';
+      lsSet(FK, lastFuel);
       if (data.invSettings) { invSettings = data.invSettings; lsSet(IK, invSettings); }
       if (data.vehicles) lsSet(VK, data.vehicles);
       if (data.receipts) lsSet(RK, data.receipts);
@@ -611,7 +670,7 @@ function buildSyncBox() {
   var guide = el('div', 'home-guide');
   guide.appendChild(el('div', 'home-guide-title', '📱 ホーム画面に追加する方法'));
   var steps = el('div', 'home-guide-step');
-  steps.innerHTML = '<b>iPhone（Safari）</b><br>① Safariでこのページを開く<br>② 下の共有ボタン（□↑）をタップ<br>③「ホーム画面に追加」を選ぶ<br><br><b>Android（Chrome）</b><br>① Chromeでこのページを開く<br>② 右上メニュー（⋮）をタップ<br>③「ホーム画面に追加」を選ぶ';
+  steps.innerHTML = '<b>iPhone（Safari）</b><br>① Safariでこのページを開く<br>② 下の共有ボタン（□↑）をタップ<br>③「ホーム画面に追加」を選ぶ<br><br><b>Android（Chrome）</b><br>① Chromeでこのページを開く<br>② 右上メニュー（⋮）をタップ<br>③「ホーム画面に追加」を選ぶ<br><br><b>更新時</b><br>DropboxのHTMLを差し替えた後、ホーム画面アプリを一度閉じて開き直してください<br><span style="color:#3a5040">版: ' + APP_VERSION + '</span>';
   guide.appendChild(steps);
   box.appendChild(guide);
 
@@ -650,6 +709,7 @@ function render() {
 }
 
 function buildForm(c) {
+  var acClient = getActiveClient();
   c.appendChild(secLbl('📅 日付'));
   c.appendChild(mkInp('date', form.date, '', function(v) { form.date = v; lsSet(DK, form); }));
   c.appendChild(secLbl('⏱ 作業時間'));
@@ -697,20 +757,21 @@ function makeTimeField(label, key, emoji) {
       camBtn.textContent = '🤖 読み取り中...'; camBtn.className = 'odo-cam-btn loading'; camBtn.disabled = true;
       var reader = new FileReader();
       reader.onload = function(ev) {
-        var imgData = ev.target.result.split(',')[1];
+        var parsedImg = parseDataUrl(ev.target.result);
         fetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
           body: JSON.stringify({
             model: 'claude-haiku-4-5-20251001', max_tokens: 64,
             messages: [{ role: 'user', content: [
-              { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: imgData } },
+              { type: 'image', source: { type: 'base64', media_type: parsedImg.mime, data: parsedImg.data } },
               { type: 'text', text: 'このオドメーター（走行距離計）の数値を半角数字のみで返してください。数字以外は一切不要。例: 115279' }
             ]}]
           })
         })
         .then(function(r) { return r.json(); })
         .then(function(data) {
+          if (data.error) { camBtn.textContent = '❌ ' + (data.error.message || 'APIエラー'); return; }
           var txt = (data.content && data.content[0] && data.content[0].text || '').replace(/[^0-9]/g, '');
           if (txt) { inp.value = txt; form[key] = txt; lsSet(DK, form); reCalc(); camBtn.textContent = '✅ ' + txt + ' km'; }
           else { camBtn.textContent = '❌ 読み取り失敗'; }
@@ -738,13 +799,13 @@ function makeTimeField(label, key, emoji) {
     field('給油金額 (円)', mkInp('number', form.fuelCost, '0', function(v) { form.fuelCost = v; lsSet(DK, form); }))
   ); fr.style.marginTop = '10px'; c.appendChild(fr);
 
+  lastFuel = getLatestFuelOdo(records) || '';
   if (lastFuel) { var pf = el('div', 'prev-fuel', '前回給油: ' + fmtNum(lastFuel) + ' km'); c.appendChild(pf); }
   // 燃費 = (今回給油オドメーター - 前回給油オドメーター) ÷ 給油量
   var fe = calcFuelEff(form.odometerFuel, form.fuel, lastFuel);
   var feBox = infoBox('前回給油からの燃費', (fe || '') + ' km/L', 'calc-fe'); if (!fe) feBox.style.display = 'none'; c.appendChild(feBox);
 
   c.appendChild(secLbl('🏷 品名・請求金額'));
-  var acClient = getActiveClient();
   var acBillingType = acClient.billingType || 'hourly';
   var itemNameInp = mkInp('text', form.itemName || acClient.itemName || '配送業務委託費', '例: 配送業務委託費', function(v) { form.itemName = v; lsSet(DK, form); });
   var itemAmtInp = mkInp('number', form.itemAmount || '', '例: 30000', function(v) { form.itemAmount = v; lsSet(DK, form); });
@@ -761,14 +822,14 @@ function makeTimeField(label, key, emoji) {
     c.appendChild(field('品名', itemNameInp));
     c.appendChild(row2(
       field('件数', qtyInp),
-      field('請求金額（円）', itemAmtInp)
+      field('請求金額（税抜・円）', itemAmtInp)
     ));
     c.appendChild(el('div', 'hint-sm', '※ ' + (acClient.clientName ? acClient.clientName + ': ' : '') + '¥' + fmtNum(acClient.perItemRate || 0) + '/件 × 件数で自動計算'));
   } else {
     // 時間単価・日額タイプ: 品名・請求金額
     c.appendChild(row2(
       field('品名', itemNameInp),
-      field('請求金額（円）', itemAmtInp)
+      field('請求金額（税抜・円）', itemAmtInp)
     ));
     // 自動計算ボタン
     var calcLabel = acBillingType === 'daily' ? '⚡ 日額を入力' : '⚡ 時給から自動計算';
@@ -800,6 +861,7 @@ function makeTimeField(label, key, emoji) {
   }
 
   c.appendChild(secLbl('📝 メモ'));
+  if (acClient.clientName) c.appendChild(el('div', 'hint-sm', '※ この日報は請求先「' + acClient.clientName + '」に紐付けて保存されます'));
   c.appendChild(mkTa(form.memo, '特記事項、トラブルなど', function(v) { form.memo = v; lsSet(DK, form); }));
   var btn = el('button', 'save-btn' + (savedFlash ? ' saved' : ''), savedFlash ? '✓ 保存しました' : '日報を保存');
   btn.addEventListener('click', saveRecord); c.appendChild(btn);
@@ -874,8 +936,9 @@ function buildList(c) {
   if (!filtered.length) { c.appendChild(el('div', 'empty', 'この月のデータはありません')); return; }
 
   filtered.forEach(function(r) {
-    var card = el('div', 'card' + (editingId === r.id ? ' editing' : ''));
-    card.appendChild(editingId === r.id ? buildEditCard(r) : buildViewCard(r)); c.appendChild(card);
+    var isEditing = String(editingId) === String(r.id);
+    var card = el('div', 'card' + (isEditing ? ' editing' : ''));
+    card.appendChild(isEditing ? buildEditCard(r) : buildViewCard(r)); c.appendChild(card);
   });
 }
 
@@ -914,7 +977,7 @@ function buildEditCard(r) {
   function eInp(type, key) { return mkInp(type, ef(key), '', function(v) { editForm[key] = v; }); }
   var dw = el('div'); dw.style.marginBottom = '10px'; dw.appendChild(el('div', 'fld-lbl', '日付')); dw.appendChild(eInp('date', 'date')); w.appendChild(dw);
   var iw = el('div'); iw.style.marginBottom = '10px'; iw.appendChild(el('div', 'fld-lbl', '品名')); iw.appendChild(mkInp('text', ef('itemName') || getActiveClient().itemName || '配送業務委託費', '', function(v) { editForm.itemName = v; })); w.appendChild(iw);
-  var aw = el('div'); aw.style.marginBottom = '10px'; aw.appendChild(el('div', 'fld-lbl', '請求金額（円）')); aw.appendChild(mkInp('number', ef('itemAmount'), '', function(v) { editForm.itemAmount = v; })); w.appendChild(aw);
+  var aw = el('div'); aw.style.marginBottom = '10px'; aw.appendChild(el('div', 'fld-lbl', '請求金額（税抜・円）')); aw.appendChild(mkInp('number', ef('itemAmount'), '', function(v) { editForm.itemAmount = v; })); w.appendChild(aw);
   var qw = el('div'); qw.style.marginBottom = '10px'; qw.appendChild(el('div', 'fld-lbl', '件数')); qw.appendChild(mkInp('number', ef('quantity'), '件数ベース請求の場合', function(v) { editForm.quantity = v; })); w.appendChild(qw);
   var g = row2(
     field('開始時刻', eInp('time', 'startTime')), field('終了時刻', eInp('time', 'endTime')),
@@ -930,6 +993,123 @@ function buildEditCard(r) {
   return w;
 }
 
+function buildClientAssignTool(c, clients) {
+  if (!clients.length || !records.length) return;
+  if (!assignClientId && selectedClientId) assignClientId = selectedClientId;
+  if (!assignClientId) assignClientId = clients[0].id;
+
+  var months = [];
+  records.forEach(function(r) {
+    if (!r.date) return;
+    var ym = r.date.slice(0, 7);
+    if (months.indexOf(ym) < 0) months.push(ym);
+  });
+  months.sort(function(a, b) { return b > a ? 1 : -1; });
+
+  var targetClient = clients.find(function(cl) { return String(cl.id) === String(assignClientId); }) || clients[0];
+  assignClientId = targetClient.id;
+  var targetRecords = records.filter(function(r) { return !assignMonth || (r.date && r.date.slice(0, 7) === assignMonth); });
+  var unassigned = targetRecords.filter(function(r) { return !r.clientId; });
+  var assignedToOther = targetRecords.filter(function(r) { return r.clientId && String(r.clientId) !== String(targetClient.id); });
+
+  var box = el('div', 'assign-box');
+  box.appendChild(el('div', 'assign-title', '🔗 過去日報の請求先一括割り当て'));
+
+  var monthWrap = el('div'); monthWrap.style.marginBottom = '8px';
+  monthWrap.appendChild(el('div', 'fld-lbl', '対象月'));
+  var monthSel = el('select', 'sel');
+  var allOpt = document.createElement('option'); allOpt.value = ''; allOpt.textContent = '全期間';
+  monthSel.appendChild(allOpt);
+  months.forEach(function(ym) {
+    var opt = document.createElement('option');
+    opt.value = ym; opt.textContent = ym.replace('-', '年') + '月';
+    if (ym === assignMonth) opt.selected = true;
+    monthSel.appendChild(opt);
+  });
+  monthSel.addEventListener('change', function() { assignMonth = monthSel.value; render(); });
+  monthWrap.appendChild(monthSel);
+  box.appendChild(monthWrap);
+
+  var clientWrap = el('div'); clientWrap.style.marginBottom = '8px';
+  clientWrap.appendChild(el('div', 'fld-lbl', '割り当てる請求先'));
+  var clientSel = el('select', 'sel');
+  clients.forEach(function(cl) {
+    var opt = document.createElement('option');
+    opt.value = cl.id; opt.textContent = cl.name + '（' + billingTypeLabel(cl.billingType) + '）';
+    if (String(cl.id) === String(assignClientId)) opt.selected = true;
+    clientSel.appendChild(opt);
+  });
+  clientSel.addEventListener('change', function() { assignClientId = clientSel.value; render(); });
+  clientWrap.appendChild(clientSel);
+  box.appendChild(clientWrap);
+
+  var stat = el('div', 'assign-stat');
+  function statCard(label, val) {
+    var card = el('div', 'assign-stat-card');
+    card.appendChild(el('div', 'assign-stat-lbl', label));
+    card.appendChild(el('div', 'assign-stat-val', String(val)));
+    return card;
+  }
+  stat.appendChild(statCard('対象日報', targetRecords.length + '件'));
+  stat.appendChild(statCard('未割当', unassigned.length + '件'));
+  box.appendChild(stat);
+
+  var hint = el('div', 'hint-sm');
+  hint.textContent = assignedToOther.length > 0
+    ? '※ すでに別の請求先が付いている日報が ' + assignedToOther.length + ' 件あります。通常は「未割当のみ」で安全です。'
+    : '※ 過去データの請求書表示には、日報への請求先割り当てが必要です。';
+  box.appendChild(hint);
+
+  var acts = el('div', 'assign-actions');
+  var safeBtn = el('button', 'assign-btn safe', '未割当のみ割り当て');
+  safeBtn.disabled = unassigned.length === 0;
+  safeBtn.style.opacity = unassigned.length === 0 ? '0.5' : '1';
+  safeBtn.addEventListener('click', function() { assignClientToPastRecords(false); });
+  var overBtn = el('button', 'assign-btn overwrite', '対象月を上書き');
+  overBtn.disabled = targetRecords.length === 0;
+  overBtn.style.opacity = targetRecords.length === 0 ? '0.5' : '1';
+  overBtn.addEventListener('click', function() { assignClientToPastRecords(true); });
+  acts.appendChild(safeBtn); acts.appendChild(overBtn);
+  box.appendChild(acts);
+
+  c.appendChild(box);
+}
+
+function assignClientToPastRecords(overwrite) {
+  var clients = lsGet(CLK) || [];
+  var cl = clients.find(function(x) { return String(x.id) === String(assignClientId); });
+  if (!cl) { alert('請求先を選択してください。'); return; }
+  var target = records.filter(function(r) {
+    if (assignMonth && (!r.date || r.date.slice(0, 7) !== assignMonth)) return false;
+    return overwrite || !r.clientId;
+  });
+  if (!target.length) { alert('割り当て対象の日報がありません。'); return; }
+  var label = assignMonth ? assignMonth.replace('-', '年') + '月' : '全期間';
+  var msg = overwrite
+    ? label + ' の日報 ' + target.length + ' 件を「' + cl.name + '」で上書きしますか？'
+    : label + ' の未割当日報 ' + target.length + ' 件を「' + cl.name + '」に割り当てますか？';
+  if (!confirm(msg)) return;
+
+  var oldRecords = records.slice();
+  records = records.map(function(r) {
+    var inMonth = !assignMonth || (r.date && r.date.slice(0, 7) === assignMonth);
+    if (!inMonth || (!overwrite && r.clientId)) return r;
+    return Object.assign({}, r, {
+      clientId: cl.id,
+      clientName: cl.name,
+      billingType: cl.billingType || 'hourly',
+      itemName: r.itemName || cl.itemName || invSettings.itemName || '配送業務委託費'
+    });
+  });
+  if (!lsSet(SK, records)) {
+    records = oldRecords;
+    alert('請求先の一括割り当て保存に失敗しました。端末の保存容量を確認してください。');
+    return;
+  }
+  alert(target.length + ' 件の日報に請求先を割り当てました。');
+  render();
+}
+
 // ════════════════════════════════════
 // 請求書タブ
 // ════════════════════════════════════
@@ -943,7 +1123,7 @@ function buildInvoice(c) {
     c.appendChild(el('div', 'hint-sm', '請求先が未登録です。下の設定から追加してください。'));
   } else {
     clients.forEach(function(cl) {
-      var isSel = cl.id === selectedClientId;
+      var isSel = String(cl.id) === String(selectedClientId);
       var card = el('div', 'cl-card' + (isSel ? ' selected' : ''));
       var hd = el('div', 'cl-card-hd');
       var nameWrap = el('div');
@@ -997,7 +1177,10 @@ function buildInvoice(c) {
     }
     settingsBox.appendChild(sg);
     var ssBtn = el('button', 'inv-settings-save', '✓ 自社情報を保存');
-    ssBtn.addEventListener('click', function() { lsSet(IK, invSettings); showInvSettings = false; render(); });
+    ssBtn.addEventListener('click', function() {
+      if (!lsSet(IK, invSettings)) { alert('自社情報の保存に失敗しました。端末の保存容量を確認してください。'); return; }
+      showInvSettings = false; render();
+    });
     settingsBox.appendChild(ssBtn);
     c.appendChild(settingsBox);
 
@@ -1019,9 +1202,9 @@ function buildInvoice(c) {
       db.addEventListener('click', function(e) {
         e.stopPropagation();
         if (!confirm(cl.name + ' を削除しますか？')) return;
-        var all = (lsGet(CLK) || []).filter(function(x) { return x.id !== cl.id; });
-        lsSet(CLK, all);
-        if (selectedClientId === cl.id) { selectedClientId = null; lsSet('kawashima-sel-client', null); }
+        var all = (lsGet(CLK) || []).filter(function(x) { return String(x.id) !== String(cl.id); });
+        if (!lsSet(CLK, all)) { alert('請求先の削除保存に失敗しました。'); return; }
+        if (String(selectedClientId) === String(cl.id)) { selectedClientId = null; lsSet('kawashima-sel-client', null); }
         render();
       });
       acts.appendChild(eb); acts.appendChild(db);
@@ -1086,13 +1269,13 @@ function buildInvoice(c) {
             if (!clientForm.name) { alert('請求先名を入力してください'); return; }
             var all = lsGet(CLK) || [];
             if (editClientId) {
-              all = all.map(function(x) { return x.id === editClientId ? Object.assign({}, clientForm, { id: editClientId }) : x; });
+              all = all.map(function(x) { return String(x.id) === String(editClientId) ? Object.assign({}, clientForm, { id: editClientId }) : x; });
             } else {
               var newClient = Object.assign({}, clientForm, { id: Date.now() });
               all.push(newClient);
               if (!selectedClientId) { selectedClientId = newClient.id; lsSet('kawashima-sel-client', selectedClientId); }
             }
-            lsSet(CLK, all);
+            if (!lsSet(CLK, all)) { alert('請求先の保存に失敗しました。端末の保存容量を確認してください。'); return; }
             showClientForm = false; editClientId = null; clientForm = { name:'', billingType:'hourly', hourlyRate:'3000', breakMin:'60', dailyRate:'', perItemRate:'', paymentNote:'当月末払い', itemName:'配送業務委託費' };
             render();
           });
@@ -1105,6 +1288,7 @@ function buildInvoice(c) {
       addBtn.addEventListener('click', function() { showClientForm = true; editClientId = null; clientForm = { name:'', billingType:'hourly', hourlyRate:'3000', breakMin:'60', dailyRate:'', perItemRate:'', paymentNote:'当月末払い', itemName:'配送業務委託費' }; render(); });
       c.appendChild(addBtn);
     }
+    buildClientAssignTool(c, clients);
   }
 
   c.appendChild(secLbl('📅 請求対象月'));
@@ -1116,11 +1300,16 @@ function buildInvoice(c) {
   mRow.appendChild(mInp); mRow.appendChild(genBtn);
   c.appendChild(mRow);
 
-  var monthRecs = records.filter(function(r) { return r.date && r.date.slice(0, 7) === invMonth; });
+  var monthRecs = records.filter(function(r) {
+    if (!r.date || r.date.slice(0, 7) !== invMonth) return false;
+    return !selectedClientId || String(r.clientId || '') === String(selectedClientId);
+  });
   monthRecs.sort(function(a, b) { return a.date < b.date ? -1 : 1; });
 
   if (!monthRecs.length) {
-    c.appendChild(el('div', 'empty', invMonth + ' の日報データがありません'));
+    var emptyMsg = invMonth + ' の日報データがありません';
+    if (selectedClientId && ac.clientName) emptyMsg = invMonth + ' の「' + ac.clientName + '」の日報データがありません';
+    c.appendChild(el('div', 'empty', emptyMsg));
     return;
   }
 
@@ -1136,7 +1325,7 @@ function buildInvoice(c) {
   var tbl = el('table', 'inv-table');
   var thead = el('thead');
   var hrow = el('tr');
-  var invHeaders = hasQty ? ['品名', '日付', '開始', '終了', '件数', '金額'] : ['品名', '日付', '開始', '終了', '稼働', '金額'];
+  var invHeaders = hasQty ? ['品名', '日付', '開始', '終了', '件数', '金額（税抜）'] : ['品名', '日付', '開始', '終了', '稼働', '金額（税抜）'];
   invHeaders.forEach(function(h) {
     var th = el('th', '', h); hrow.appendChild(th);
   });
@@ -1175,7 +1364,7 @@ function buildInvoice(c) {
 
   var tbox = el('div', 'inv-total-box');
   var tlbl = el('div');
-  tlbl.appendChild(el('div', 'inv-total-lbl', '小計: ' + fmtYen(subtotal)));
+  tlbl.appendChild(el('div', 'inv-total-lbl', '小計（税抜）: ' + fmtYen(subtotal)));
   tlbl.appendChild(el('div', 'inv-total-lbl', '消費税（' + taxRate + '%）: ' + fmtYen(tax)));
   tbox.appendChild(tlbl);
   var tval = el('div');
@@ -1211,7 +1400,7 @@ function buildInvoice(c) {
 
   var note = el('div', 'hint-sm');
   note.style.marginTop = '12px';
-  note.textContent = '※ 各日の請求金額は日報入力画面の「請求金額」欄で設定できます';
+  note.textContent = '※ 各日の請求金額は日報入力画面の「請求金額（税抜）」欄で設定できます';
   c.appendChild(note);
 }
 
@@ -1220,26 +1409,27 @@ function generatePrintInvoice(monthRecs, subtotal, tax, total) {
   var issueDate = today();
   var ym = invMonth.replace('-', '年') + '月';
   var hasRegNo = invSettings.invoiceRegNo && invSettings.invoiceRegNo.trim();
+  var safeYm = escHtml(ym);
 
   var body = '';
   body += '<div class="pi-title">' + (hasRegNo ? '適格請求書' : '請　求　書') + '</div>';
   body += '<div class="pi-meta">';
-  body += '<div><div class="pi-sub">発行日：' + issueDate + '</div><div class="pi-sub">対象月：' + ym + '</div></div>';
-  body += '<div class="pi-from">' + (invSettings.myName || '川島運輸');
-  if (hasRegNo) body += '<br><span class="pi-reg">登録番号：' + invSettings.invoiceRegNo.trim() + '</span>';
-  if (invSettings.myAddress) body += '<br>' + invSettings.myAddress;
-  if (invSettings.myTel) body += '<br>TEL: ' + invSettings.myTel;
-  if (invSettings.email) body += '<br>Mail: ' + invSettings.email;
+  body += '<div><div class="pi-sub">発行日：' + escHtml(issueDate) + '</div><div class="pi-sub">対象月：' + safeYm + '</div></div>';
+  body += '<div class="pi-from">' + escHtml(invSettings.myName || '川島運輸');
+  if (hasRegNo) body += '<br><span class="pi-reg">登録番号：' + escHtml(invSettings.invoiceRegNo.trim()) + '</span>';
+  if (invSettings.myAddress) body += '<br>' + escHtmlBr(invSettings.myAddress);
+  if (invSettings.myTel) body += '<br>TEL: ' + escHtml(invSettings.myTel);
+  if (invSettings.email) body += '<br>Mail: ' + escHtml(invSettings.email);
   body += '</div></div>';
   var acPrint = getActiveClient();
-  body += '<div class="pi-to">' + (acPrint.clientName || '委託先') + ' 御中</div>';
+  body += '<div class="pi-to">' + escHtml(acPrint.clientName || '委託先') + ' 御中</div>';
   var defaultItemName = acPrint.itemName || '配送業務委託費';
   body += '<div class="pi-total-box"><div class="pi-total-lbl">ご請求金額（税込）</div><div class="pi-total-val">' + fmtYen(total) + '</div></div>';
   var printHasQty = monthRecs.some(function(r) { return r.quantity && parseFloat(r.quantity) > 0; });
   var printTotalQty = 0;
   body += '<table class="pi-table"><thead><tr>';
   var piHeaders = printHasQty ? ['品名','日付','開始','終了','件数','金額（税抜）'] : ['品名','日付','開始','終了','稼働時間','金額（税抜）'];
-  piHeaders.forEach(function(h){ body += '<th>' + h + '</th>'; });
+  piHeaders.forEach(function(h){ body += '<th>' + escHtml(h) + '</th>'; });
   body += '</tr></thead><tbody>';
   monthRecs.forEach(function(r) {
     var amt = parseFloat(r.itemAmount) || 0;
@@ -1247,30 +1437,30 @@ function generatePrintInvoice(monthRecs, subtotal, tax, total) {
     printTotalQty += qty;
     var rItemName = r.itemName || defaultItemName;
     var col5 = printHasQty ? (qty > 0 ? qty + '件' : '-') : (r.duration || '-');
-    body += '<tr><td class="td-l">' + rItemName + '</td><td class="td-l">' + r.date + '</td><td>' + (r.startTime||'-') + '</td><td>' + (r.endTime||'-') + '</td><td>' + col5 + '</td><td>' + fmtYen(amt) + '</td></tr>';
+    body += '<tr><td class="td-l">' + escHtml(rItemName) + '</td><td class="td-l">' + escHtml(r.date) + '</td><td>' + escHtml(r.startTime||'-') + '</td><td>' + escHtml(r.endTime||'-') + '</td><td>' + escHtml(col5) + '</td><td>' + escHtml(fmtYen(amt)) + '</td></tr>';
   });
   var subtotalLabel = printHasQty ? '小計（' + printTotalQty + '件 / ' + monthRecs.length + '日）' : '小計（' + monthRecs.length + '日）';
-  body += '<tr class="tr-total"><td class="td-l" colspan="4">' + subtotalLabel + '</td><td></td><td>' + fmtYen(subtotal) + '</td></tr>';
-  body += '<tr class="tr-total"><td class="td-l" colspan="4">消費税（' + taxRate + '%）</td><td></td><td>' + fmtYen(tax) + '</td></tr>';
-  body += '<tr class="tr-total"><td class="td-l" colspan="4"><strong>合計（税込）</strong></td><td></td><td><strong>' + fmtYen(total) + '</strong></td></tr>';
+  body += '<tr class="tr-total"><td class="td-l" colspan="4">' + escHtml(subtotalLabel) + '</td><td></td><td>' + escHtml(fmtYen(subtotal)) + '</td></tr>';
+  body += '<tr class="tr-total"><td class="td-l" colspan="4">消費税（' + escHtml(taxRate) + '%）</td><td></td><td>' + escHtml(fmtYen(tax)) + '</td></tr>';
+  body += '<tr class="tr-total"><td class="td-l" colspan="4"><strong>合計（税込）</strong></td><td></td><td><strong>' + escHtml(fmtYen(total)) + '</strong></td></tr>';
   body += '</tbody></table>';
 
   // インボイス要件：税率ごとの対価・消費税額の明記
   if (hasRegNo) {
     body += '<div class="pi-tax-summary">';
-    body += '<div class="pi-tax-row"><span>' + taxRate + '%対象　税抜金額</span><span>' + fmtYen(subtotal) + '</span></div>';
-    body += '<div class="pi-tax-row"><span>' + taxRate + '%対象　消費税額</span><span>' + fmtYen(tax) + '</span></div>';
+    body += '<div class="pi-tax-row"><span>' + escHtml(taxRate) + '%対象　税抜金額</span><span>' + escHtml(fmtYen(subtotal)) + '</span></div>';
+    body += '<div class="pi-tax-row"><span>' + escHtml(taxRate) + '%対象　消費税額</span><span>' + escHtml(fmtYen(tax)) + '</span></div>';
     body += '</div>';
   }
 
   body += '<div class="pi-note">';
-  if (hasRegNo) body += '適格請求書発行事業者登録番号：' + invSettings.invoiceRegNo.trim() + '<br>';
-  body += 'お支払い条件：' + (acPrint.paymentNote || '当月末払い') + '<br>';
-  if (invSettings.bankInfo) body += '振込先：' + invSettings.bankInfo + '<br>';
+  if (hasRegNo) body += '適格請求書発行事業者登録番号：' + escHtml(invSettings.invoiceRegNo.trim()) + '<br>';
+  body += 'お支払い条件：' + escHtml(acPrint.paymentNote || '当月末払い') + '<br>';
+  if (invSettings.bankInfo) body += '振込先：' + escHtmlBr(invSettings.bankInfo) + '<br>';
   body += '</div>';
 
   var fullHtml = '<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8">'
-    + '<title>請求書_' + ym + '</title><style>'
+    + '<title>請求書_' + safeYm + '</title><style>'
     + '@page{size:A4 portrait;margin:10mm 12mm;}'
     + '*{box-sizing:border-box;}'
     + 'body{font-family:"Hiragino Kaku Gothic ProN","Meiryo",sans-serif;color:#000;background:#fff;font-size:10px;margin:0;padding:0;}'
@@ -1341,7 +1531,7 @@ var vehForm = { name: '', shaken: '', jibaiseki: '', ninni: '', oilLastOdo: '', 
 // ════════════════════════════════════════
 // 📸 レシート経費タブ
 // ════════════════════════════════════════
-var rcptState = { img: null, imgData: null, analyzing: false, result: null, form: null, error: '' };
+var rcptState = { img: null, imgData: null, mime: 'image/jpeg', analyzing: false, result: null, form: null, error: '' };
 var rcptMode = 'single';
 var batchItems = [];
 var batchProcessing = false;
@@ -1388,8 +1578,10 @@ function buildReceiptTab(c) {
     var f = e.target.files[0]; if (!f) return;
     var reader = new FileReader();
     reader.onload = function(ev) {
+      var parsed = parseDataUrl(ev.target.result);
       rcptState.img = ev.target.result;
-      rcptState.imgData = ev.target.result.split(',')[1];
+      rcptState.imgData = parsed.data;
+      rcptState.mime = parsed.mime;
       rcptState.result = null; rcptState.form = null; rcptState.error = '';
       render();
     };
@@ -1502,8 +1694,9 @@ function buildReceiptTab(c) {
       var db = el('button', 'del-btn', '✕');
       db.addEventListener('click', function() {
         if (!confirm('削除しますか？')) return;
-        var all = (lsGet(RK) || []).filter(function(x) { return x.id !== r.id; });
-        lsSet(RK, all); render();
+        var all = (lsGet(RK) || []).filter(function(x) { return String(x.id) !== String(r.id); });
+        if (!lsSet(RK, all)) { alert('経費の削除保存に失敗しました。'); return; }
+        render();
       });
       row.appendChild(db);
       info.appendChild(row);
@@ -1531,7 +1724,8 @@ function buildBatchMode(c, apiKey) {
     files.forEach(function(f, idx) {
       var reader = new FileReader();
       reader.onload = function(ev) {
-        batchItems[idx] = { img: ev.target.result, imgData: ev.target.result.split(',')[1], status: 'pending', result: null, form: null, name: f.name };
+        var parsed = parseDataUrl(ev.target.result);
+        batchItems[idx] = { img: ev.target.result, imgData: parsed.data, mime: parsed.mime, status: 'pending', result: null, form: null, name: f.name };
         loaded++;
         if (loaded === files.length) render();
       };
@@ -1631,12 +1825,13 @@ function analyzeBatch(apiKey) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
       body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 256, messages: [{ role: 'user', content: [
-        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: item.imgData } },
+        { type: 'image', source: { type: 'base64', media_type: item.mime || 'image/jpeg', data: item.imgData } },
         { type: 'text', text: prompt }
       ]}]})
     })
     .then(function(r) { return r.json(); })
     .then(function(data) {
+      if (data.error) { item.status = 'error'; item.error = data.error.message || 'APIエラー'; return; }
       var text = (data.content && data.content[0] && data.content[0].text) || '';
       try {
         var parsed = JSON.parse(text.replace(/```json|```/g, '').trim());
@@ -1650,41 +1845,61 @@ function analyzeBatch(apiKey) {
   next();
 }
 
+function makeReceiptThumb(dataUrl, cb) {
+  if (!dataUrl) { cb(null); return; }
+  var im = new Image();
+  im.onload = function() {
+    try {
+      var cv = document.createElement('canvas');
+      var maxW = 400;
+      var scale = im.width > maxW ? maxW / im.width : 1;
+      cv.width = Math.max(1, Math.round(im.width * scale));
+      cv.height = Math.max(1, Math.round(im.height * scale));
+      cv.getContext('2d').drawImage(im, 0, 0, cv.width, cv.height);
+      cb(cv.toDataURL('image/jpeg', 0.4));
+    } catch(e) {
+      cb(null);
+    }
+  };
+  im.onerror = function() { cb(null); };
+  im.src = dataUrl;
+}
+
 function saveBatchAll() {
   var all = lsGet(RK) || [];
+  var doneItems = batchItems.filter(function(item) { return item.status === 'done' && item.form; });
   var saved = 0;
-  batchItems.forEach(function(item) {
-    if (item.status !== 'done' || !item.form) return;
-    // 画像はサムネイルのみ保存（容量節約）
-    var thumb = null;
-    try {
-      var im = document.createElement('img');
-      im.src = item.img;
-      if (im.width > 0) {
-        var cv = document.createElement('canvas');
-        var maxW = 400;
-        var scale = im.width > maxW ? maxW / im.width : 1;
-        cv.width = im.width * scale; cv.height = im.height * scale;
-        cv.getContext('2d').drawImage(im, 0, 0, cv.width, cv.height);
-        thumb = cv.toDataURL('image/jpeg', 0.4);
-      } else {
-        thumb = item.img;
+  var baseId = Date.now();
+
+  function finish() {
+    if (!lsSet(RK, all)) {
+      // 容量超過時は今回追加分だけ画像なしで再試行
+      all = all.map(function(r) {
+        return r._newBatch ? Object.assign({}, r, { img: null }) : r;
+      });
+      if (!lsSet(RK, all)) {
+        alert('経費データの保存に失敗しました。古い経費データをエクスポート後に削除してください。');
+        return;
       }
-    } catch(e) {}
-    all.push({ id: Date.now() + '_' + saved, date: item.form.date, amount: parseFloat(item.form.amount) || 0, category: item.form.category, memo: item.form.memo, payment: item.form.payment, img: thumb });
-    saved++;
-  });
-  try {
+      alert('画像の保存容量を超過したため、今回分はレシート画像なしで保存しました。');
+    }
+    all.forEach(function(r) { delete r._newBatch; });
     lsSet(RK, all);
-  } catch(e) {
-    // 容量超過時は画像なしで再試行
-    all = all.map(function(r) { return Object.assign({}, r, { img: null }); });
-    lsSet(RK, all);
-    alert('画像の保存容量を超過したため、レシート画像なしで保存しました。');
+    batchItems = [];
+    alert(saved + '件を経費に保存しました');
+    render();
   }
-  batchItems = [];
-  alert(saved + '件を経費に保存しました');
-  render();
+
+  function next(i) {
+    if (i >= doneItems.length) { finish(); return; }
+    var item = doneItems[i];
+    makeReceiptThumb(item.img, function(thumb) {
+      all.push({ id: baseId + '_' + saved, date: item.form.date, amount: parseFloat(item.form.amount) || 0, category: item.form.category, memo: item.form.memo, payment: item.form.payment, img: thumb, _newBatch: true });
+      saved++;
+      next(i + 1);
+    });
+  }
+  next(0);
 }
 
 function exportBatchToLedger() {
@@ -1724,7 +1939,7 @@ function analyzeReceipt() {
       messages: [{
         role: 'user',
         content: [
-          { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: rcptState.imgData } },
+          { type: 'image', source: { type: 'base64', media_type: rcptState.mime || 'image/jpeg', data: rcptState.imgData } },
           { type: 'text', text: prompt }
         ]
       }]
@@ -1762,15 +1977,16 @@ function saveReceipt() {
   function doSave(imgToSave) {
     var all = lsGet(RK) || [];
     all.push({ id: Date.now(), date: f.date, amount: parseFloat(f.amount), category: f.category, memo: f.memo, payment: f.payment, img: imgToSave });
-    try {
-      lsSet(RK, all);
-    } catch(e) {
+    if (!lsSet(RK, all)) {
       // localStorage容量超過時はサムネイルなしで保存
       all[all.length - 1].img = null;
-      lsSet(RK, all);
-      alert('画像の保存容量を超過したため、レシート画像なしで保存しました。\n古い経費データをエクスポート後に削除してください。');
+      if (!lsSet(RK, all)) {
+        alert('経費データの保存に失敗しました。\n古い経費データをエクスポート後に削除してください。');
+        return;
+      }
+      alert('画像の保存容量を超過したため、レシート画像なしで保存しました。');
     }
-    rcptState.img = null; rcptState.imgData = null; rcptState.result = null; rcptState.form = null;
+    rcptState.img = null; rcptState.imgData = null; rcptState.mime = 'image/jpeg'; rcptState.result = null; rcptState.form = null;
     render();
   }
 
@@ -1844,8 +2060,9 @@ function buildVehicleTab(c) {
     var db = el('button', 'veh-del-btn', '✕');
     db.addEventListener('click', function() {
       if (!confirm(v.name + 'を削除しますか？')) return;
-      var all = (lsGet(VK) || []).filter(function(x) { return x.id !== v.id; });
-      lsSet(VK, all); render();
+      var all = (lsGet(VK) || []).filter(function(x) { return String(x.id) !== String(v.id); });
+      if (!lsSet(VK, all)) { alert('車両の削除保存に失敗しました。'); return; }
+      render();
     });
     acts.appendChild(eb); acts.appendChild(db);
     hd.appendChild(nameEl); hd.appendChild(acts);
@@ -1959,11 +2176,11 @@ function buildVehicleTab(c) {
           if (!vehForm.name) { alert('車両名を入力してください'); return; }
           var all = lsGet(VK) || [];
           if (editVehId) {
-            all = all.map(function(x) { return x.id === editVehId ? Object.assign({}, vehForm, { id: editVehId }) : x; });
+            all = all.map(function(x) { return String(x.id) === String(editVehId) ? Object.assign({}, vehForm, { id: editVehId }) : x; });
           } else {
             all.push(Object.assign({}, vehForm, { id: Date.now() }));
           }
-          lsSet(VK, all);
+          if (!lsSet(VK, all)) { alert('車両情報の保存に失敗しました。端末の保存容量を確認してください。'); return; }
           showVehForm = false; editVehId = null; vehForm = { name:'',shaken:'',jibaiseki:'',ninni:'',oilLastOdo:'',oilInterval:'10000',oilWarnThreshold:'5000',filterLastOdo:'',filterInterval:'20000',filterWarnThreshold:'5000' };
           render();
         });
@@ -2093,7 +2310,7 @@ function buildSummaryTab(c) {
     saveBtn.addEventListener('click', function() {
       var all = lsGet(TK) || {};
       all[ym] = { sentDate: sentInp.value, confirmed: chk.checked };
-      lsSet(TK, all);
+      if (!lsSet(TK, all)) { alert('請求管理メモの保存に失敗しました。'); return; }
       savedEl.textContent = '✓ 保存しました';
       setTimeout(function() { savedEl.textContent = ''; }, 2000);
     });
@@ -2104,17 +2321,61 @@ function buildSummaryTab(c) {
   });
 }
 
+function validateRecordInput(data) {
+  var errors = [];
+  var warnings = [];
+  if (!data.date) errors.push('日付を入力してください。');
+  if ((data.startTime && !data.endTime) || (!data.startTime && data.endTime)) warnings.push('開始時刻と終了時刻の片方だけが入力されています。');
+
+  var odoS = parseFloat(data.odometerStart);
+  var odoE = parseFloat(data.odometerEnd);
+  if (data.odometerStart && data.odometerEnd && !isNaN(odoS) && !isNaN(odoE) && odoE <= odoS) {
+    errors.push('終了時走行距離は開始時走行距離より大きい値にしてください。');
+  } else if ((data.odometerStart && !data.odometerEnd) || (!data.odometerStart && data.odometerEnd)) {
+    warnings.push('開始時または終了時の走行距離が片方だけ入力されています。');
+  }
+
+  var hasFuelInput = data.odometerFuel || data.fuel || data.fuelCost;
+  if (hasFuelInput) {
+    if (!data.odometerFuel) warnings.push('給油時走行距離が未入力です。燃費計算ができません。');
+    if (!data.fuel) warnings.push('給油量が未入力です。燃費計算ができません。');
+    if (data.fuel && parseFloat(data.fuel) <= 0) errors.push('給油量は0より大きい値にしてください。');
+    if (data.fuel && !data.fuelCost) warnings.push('給油金額が未入力です。燃料費集計に反映されません。');
+  }
+
+  if (data.itemAmount && parseFloat(data.itemAmount) < 0) errors.push('請求金額は0以上で入力してください。');
+  if (errors.length) { alert(errors.join('\n')); return false; }
+  if (warnings.length && !confirm(warnings.join('\n') + '\n\nこの内容で保存しますか？')) return false;
+  return true;
+}
+
 function saveRecord() {
-  if (!form.date) return;
+  if (!validateRecordInput(form)) return;
+  var sameDay = records.filter(function(r) { return r.date === form.date; });
+  if (sameDay.length && !confirm(form.date + ' の日報がすでに ' + sameDay.length + ' 件あります。\n別件として追加保存しますか？\n\n既存の日報を直す場合は「キャンセル」して履歴から編集してください。')) return;
+
+  var ac = getActiveClient();
+  var prevFuel = getLatestFuelOdo(records);
   // 燃費 = (今回給油odo - 前回給油odo) ÷ 給油量
   var rec = Object.assign({}, form, {
+    clientId: ac.clientId,
+    clientName: ac.clientName,
+    billingType: ac.billingType,
     duration: calcDuration(form.startTime, form.endTime),
     distance: calcDistance(form.odometerStart, form.odometerEnd),
-    fuelEfficiency: calcFuelEff(form.odometerFuel, form.fuel, lastFuel),
+    fuelEfficiency: calcFuelEff(form.odometerFuel, form.fuel, prevFuel),
     id: Date.now()
   });
-  records.unshift(rec); lsSet(SK, records); lsDel(DK);
-  if (form.odometerFuel) { lastFuel = form.odometerFuel; lsSet(FK, lastFuel); }
+  var oldRecords = records.slice();
+  records.unshift(rec);
+  if (!lsSet(SK, records)) {
+    records = oldRecords;
+    alert('日報の保存に失敗しました。端末の保存容量を確認してください。');
+    return;
+  }
+  lsDel(DK);
+  lastFuel = getLatestFuelOdo(records);
+  lsSet(FK, lastFuel);
   var prevItemName = form.itemName || '';
   var prevItemAmount = form.itemAmount || '';
   form = { date: today(), startTime: '', endTime: '', odometerStart: form.odometerEnd || '', odometerEnd: '', odometerFuel: '', fuel: '', fuelCost: '', memo: '', itemName: prevItemName, itemAmount: prevItemAmount, quantity: '' };
@@ -2124,15 +2385,34 @@ function saveRecord() {
 
 function deleteRecord(id) {
   if (!confirm('この日報を削除しますか？')) return;
-  records = records.filter(function(r) { return r.id !== id; }); lsSet(SK, records); render();
+  var oldRecords = records.slice();
+  records = records.filter(function(r) { return String(r.id) !== String(id); });
+  if (!lsSet(SK, records)) {
+    records = oldRecords;
+    alert('日報の削除保存に失敗しました。');
+    return;
+  }
+  lastFuel = getLatestFuelOdo(records);
+  lsSet(FK, lastFuel);
+  render();
 }
 
 function saveEdit() {
+  if (!validateRecordInput(editForm)) return;
+  var oldRecords = records.slice();
   records = records.map(function(r) {
-    if (r.id !== editingId) return r;
-    return Object.assign({}, editForm, { duration: calcDuration(editForm.startTime, editForm.endTime), distance: calcDistance(editForm.odometerStart, editForm.odometerEnd), fuelEfficiency: calcFuelEff(editForm.odometerFuel, editForm.fuel, getPrevFuelOdo(r, records)) || editForm.fuelEfficiency || '' });
+    if (String(r.id) !== String(editingId)) return r;
+    var edited = Object.assign({}, editForm, { id: r.id });
+    return Object.assign({}, edited, { duration: calcDuration(edited.startTime, edited.endTime), distance: calcDistance(edited.odometerStart, edited.odometerEnd), fuelEfficiency: calcFuelEff(edited.odometerFuel, edited.fuel, getPrevFuelOdo(edited, records)) || edited.fuelEfficiency || '' });
   });
-  lsSet(SK, records); editingId = null; editForm = {}; render();
+  if (!lsSet(SK, records)) {
+    records = oldRecords;
+    alert('日報の編集保存に失敗しました。端末の保存容量を確認してください。');
+    return;
+  }
+  lastFuel = getLatestFuelOdo(records);
+  lsSet(FK, lastFuel);
+  editingId = null; editForm = {}; render();
 }
 
 function makeXls(headers, rows, sheetName) {
@@ -2159,11 +2439,7 @@ function makeXls(headers, rows, sheetName) {
 
 function downloadXls(xml, filename) {
   var blob = new Blob([xml], { type: 'application/vnd.ms-excel;charset=utf-8' });
-  var a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(a.href);
+  downloadBlob(blob, filename);
 }
 
 function exportFuelToLedger() {
@@ -2242,17 +2518,23 @@ render();
   document.getElementById('pwa-icon').href = iconUrl;
   document.getElementById('pwa-favicon').href = iconUrl;
 
-  var manifest = { name:'川島運輸 配送日報', short_name:'川島運輸', description:'配送日報・請求書・経費管理', start_url:'.', display:'standalone', orientation:'portrait', background_color:'#0f1410', theme_color:'#0f1410', icons:[{src:iconUrl,sizes:'512x512',type:'image/png',purpose:'any maskable'}] };
+  var appUrl = (location.href || '.').split('#')[0];
+  var manifest = { name:'川島運輸 配送日報', short_name:'川島運輸', description:'配送日報・請求書・経費管理', start_url:appUrl, scope:'./', display:'standalone', orientation:'portrait', background_color:'#0f1410', theme_color:'#0f1410', icons:[{src:iconUrl,sizes:'512x512',type:'image/png',purpose:'any maskable'}] };
   var mBlob = new Blob([JSON.stringify(manifest)],{type:'application/json'});
   document.getElementById('pwa-manifest').href = URL.createObjectURL(mBlob);
 
+  // Dropboxで単体HTMLとして運用するため、古いService Workerのキャッシュで旧版が開く事故を避ける。
   if ('serviceWorker' in navigator) {
-    var swCode = 'var C="kaw-v4";'
-      + 'self.addEventListener("install",function(e){self.skipWaiting();e.waitUntil(caches.open(C).then(function(c){return c.addAll(["."]);}))}); '
-      + 'self.addEventListener("activate",function(e){e.waitUntil(caches.keys().then(function(ks){return Promise.all(ks.filter(function(k){return k!==C;}).map(function(k){return caches.delete(k);}))}));self.clients.claim();}); '
-      + 'self.addEventListener("fetch",function(e){e.respondWith(fetch(e.request).then(function(r){if(r&&r.status===200){var rc=r.clone();caches.open(C).then(function(c){c.put(e.request,rc);});}return r;}).catch(function(){return caches.match(e.request).then(function(r){return r||caches.match(".");});}));});';
-    var swBlob = new Blob([swCode],{type:'application/javascript'});
-    navigator.serviceWorker.register(URL.createObjectURL(swBlob)).catch(function(){});
+    navigator.serviceWorker.getRegistrations().then(function(regs) {
+      regs.forEach(function(reg) { reg.unregister().catch(function(){}); });
+    }).catch(function(){});
+  }
+  if (window.caches && caches.keys) {
+    caches.keys().then(function(keys) {
+      keys.filter(function(k) { return k.indexOf('kaw-') === 0; }).forEach(function(k) {
+        caches.delete(k).catch(function(){});
+      });
+    }).catch(function(){});
   }
 })();
 </script>
